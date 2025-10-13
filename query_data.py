@@ -26,7 +26,7 @@ db = Chroma(embedding_function=embeddings, persist_directory=chroma_path)
 # -----------------------------
 query_text = input("Enter your query: ").strip()
 if not query_text:
-    print("❌ Query cannot be empty.")
+    print(" Query cannot be empty.")
     exit()
 
 # -----------------------------
@@ -34,7 +34,7 @@ if not query_text:
 # -----------------------------
 results = db.similarity_search_with_relevance_scores(query_text, k=top_k)
 if not results:
-    print(f"❌ No matching results found for: {query_text}")
+    print(f"No matching results found for: {query_text}")
     exit()
 
 print("\n🔹 Retrieved Chunks:")
@@ -46,7 +46,7 @@ for i, (doc, score) in enumerate(results, 1):
 # -----------------------------
 # Load Hugging Face online model
 # -----------------------------
-print("\n⏳ Loading Hugging Face model from hub (this may take a while)...")
+print("\nLoading Hugging Face model from hub (this may take a while)...")
 tokenizer = AutoTokenizer.from_pretrained(hf_model_name)
 model = AutoModelForCausalLM.from_pretrained(hf_model_name)
 llm_pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer)
@@ -60,5 +60,5 @@ prompt = f"Answer the following question based on the context below.\n\nContext:
 resp = llm_pipeline(prompt, max_new_tokens=max_tokens, do_sample=True, temperature=0.7)
 answer = resp[0]["generated_text"]
 
-print("\n✅ Generated Answer:\n")
+print("\n Generated Answer:\n")
 print(answer)
