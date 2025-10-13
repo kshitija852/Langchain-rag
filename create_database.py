@@ -8,21 +8,21 @@ from dotenv import load_dotenv
 from langchain_community.document_loaders import DirectoryLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings  # ✅ new import (no deprecation)
+from langchain_huggingface import HuggingFaceEmbeddings  # new import (no deprecation)
 
 # -----------------------------
-# 1️⃣ Load environment variables
+#  Load environment variables
 # -----------------------------
 load_dotenv()  # loads from .env in project root
 
 # -----------------------------
-# 2️⃣ Data setup
+# Data setup
 # -----------------------------
 data_path = "Data"
 chroma_path = "chroma"
 
 # -----------------------------
-# 3️⃣ Safe delete function for Chroma DB
+# Safe delete function for Chroma DB
 # -----------------------------
 def safe_delete_chroma(path, retries=5, delay=2):
     """Safely delete a Chroma DB folder, retrying if Windows locks files."""
@@ -31,20 +31,20 @@ def safe_delete_chroma(path, retries=5, delay=2):
     for i in range(retries):
         try:
             shutil.rmtree(path)
-            print(f"✅ Deleted existing Chroma DB at {path}")
+            print(f"Deleted existing Chroma DB at {path}")
             return
         except PermissionError:
-            print(f"⚠️ Attempt {i+1}: Chroma still in use, retrying...")
+            print(f"Attempt {i+1}: Chroma still in use, retrying...")
             time.sleep(delay)
-    print(f"❌ Could not delete {path} — please close any running Python/Chroma processes.")
+    print(f" Could not delete {path} — please close any running Python/Chroma processes.")
 
 # -----------------------------
-# 4️⃣ Delete existing database before creating new one
+#  Delete existing database before creating new one
 # -----------------------------
 safe_delete_chroma(chroma_path)
 
 # -----------------------------
-# 5️⃣ Load and split Markdown documents
+#  Load and split Markdown documents
 # -----------------------------
 def load_data():
     loader = DirectoryLoader(data_path, glob="*.md")
@@ -64,15 +64,15 @@ chunks = text_splitter.split_documents(docs)
 print(f"📄 Split {len(docs)} documents into {len(chunks)} chunks.")
 
 # -----------------------------
-# 6️⃣ Initialize embeddings (free + local)
+#  Initialize embeddings (free + local)
 # -----------------------------
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
 # -----------------------------
-# 7️⃣ Create Chroma DB from chunks
+#  Create Chroma DB from chunks
 # -----------------------------
 db = Chroma.from_documents(chunks, embeddings, persist_directory=chroma_path)
 # db.persist()
 # The data got successfully added onto the chroma.
-print(f"✅ Persisted database successfully to: {chroma_path}")
+print(f"Persisted database successfully to: {chroma_path}")
 
