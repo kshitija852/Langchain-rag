@@ -1,5 +1,9 @@
-# This workflow will install Python dependencies, run tests and lint with a single version of Python
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+# .github/workflows/test_app.yml
+# CI/CD pipeline for the LangChain RAG application
+# Runs lint checks and the full pytest suite on every push / PR to main.
+# Heavy ML dependencies (torch, transformers, sentence-transformers) are
+# mocked inside the tests, so the runner never needs a GPU or downloads
+# multi-GB model weights.
 
 name: Python application
 
@@ -10,30 +14,118 @@ on:
     branches: [ "main" ]
 
 permissions:
-  contents: read
+  contents: write          # write access needed to push to qa branch
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python 3.10
-      uses: actions/setup-python@v3
-      with:
-        python-version: "3.10"
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install flake8 pytest
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-    - name: Lint with flake8
-      run: |
-        # stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-    - name: Test with pytest
-      run: |
-        pytest
+      # ── 1. Checkout (full history so we can push to qa) ───────────────────
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # fetch all branches, not just the triggering one
+
+      # ── 2. Python setup ───────────────────────────────────────────────────
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      # ── 3. Install dependencies ───────────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+
+          # Linting + testing framework (always installed)
+          pip install flake8 pytest pytest-mock
+
+          # Install project dependencies if requirements.txt exists.
+          # torch is installed as CPU-only to keep the runner fast & lean.
+          if [ -f requirements.txt ]; then
+            # Replace any torch line with the lightweight CPU wheel index
+            pip install --index-url https://download.pytorch.org/whl/cpu \
+              torch torchvision torchaudio
+            # Install everything else, skipping torch (already installed above)
+            grep -iv "^torch" requirements.txt | pip install -r /dev/stdin
+          fi
+
+          # Core LangChain packages used directly in the source files
+          pip install \
+            langchain \
+            langchain-community \
+            langchain-huggingface \
+            langchain-text-splitters \
+            sentence-transformers \
+            transformers \
+            chromadb \
+            pypdf \
+            python-dotenv
+
+      # ── 4. Lint ───────────────────────────────────────────────────────────
+      - name: Lint with flake8
+        run: |
+          # Hard-fail on syntax errors or undefined names
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          # Warn (but don't fail) on style issues; 127-char line limit
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      # ── 5. Create required directories ───────────────────────────────────
+      # Some tests or import paths expect these directories to exist.
+      - name: Create project directories
+        run: |
+          mkdir -p Data chroma
+
+      # ── 6. Run tests ──────────────────────────────────────────────────────
+      - name: Test with pytest
+        env:
+          # Prevent HuggingFace / sentence-transformers from downloading
+          # real model weights during the test run.
+          TRANSFORMERS_OFFLINE: "1"
+          HF_DATASETS_OFFLINE: "1"
+          # Silence tokenizer parallelism warnings in CI
+          TOKENIZERS_PARALLELISM: "false"
+        run: |
+          pytest test_app.py -v --tb=short
+
+  # ── Deploy to QA ───────────────────────────────────────────────────────────
+  # Runs only after the build job passes. Merges main into the qa branch
+  # (creating it first if it doesn't exist yet) and pushes the result.
+  # Only triggers on direct pushes to main — not on pull-request events
+  # (PRs haven't been merged yet, so promoting them to qa would be premature).
+  deploy-to-qa:
+    runs-on: ubuntu-latest
+    needs: build                        # only runs if build succeeds
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      # ── 1. Checkout with full history ─────────────────────────────────────
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 2. Configure git identity ─────────────────────────────────────────
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      # ── 3. Push main → qa ─────────────────────────────────────────────────
+      - name: Merge main into qa and push
+        run: |
+          # Fetch all remote refs (qa may or may not exist yet)
+          git fetch origin
+
+          # Check out qa; create from main if the branch doesn't exist yet
+          if git ls-remote --exit-code --heads origin qa; then
+            git checkout qa
+            git pull origin qa
+            git merge --no-ff origin/main \
+              -m "ci: auto-merge main into qa after successful build [skip ci]"
+          else
+            echo "qa branch not found — creating from main"
+            git checkout -b qa
+          fi
+
+          git push origin qa
