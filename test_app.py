@@ -97,15 +97,45 @@ class TestSafeDeleteChroma:
 
 class TestLoadData:
 
+    def _load_cd_with_mocked_embeddings(self):
+        """
+        Import create_database with HuggingFaceEmbeddings fully mocked so
+        the top-level `embeddings = HuggingFaceEmbeddings(...)` line never
+        tries to download model weights from HuggingFace.
+        """
+        mock_hf = MagicMock()                       # mock the class itself
+        mock_hf.return_value = MagicMock()          # mock the instance it returns
+
+        mocks = {
+            "dotenv": MagicMock(),
+            "langchain_community": MagicMock(),
+            "langchain_community.document_loaders": MagicMock(),
+            "langchain_community.embeddings": MagicMock(),
+            "langchain_community.embeddings.ollama": MagicMock(),
+            "langchain_community.vectorstores": MagicMock(),
+            "langchain_text_splitters": MagicMock(),
+            # Patch the huggingface module AND its HuggingFaceEmbeddings symbol
+            "langchain_huggingface": MagicMock(HuggingFaceEmbeddings=mock_hf),
+        }
+
+        # Remove any previously cached import so the patched version is used
+        sys.modules.pop("create_database", None)
+
+        with patch.dict(sys.modules, mocks):
+            with patch("builtins.open", MagicMock()), \
+                 patch("os.path.exists", return_value=False):
+                import create_database as cd
+        return cd
+
     def test_returns_list_of_documents(self):
         """load_data should return whatever the loader provides."""
-        cd = import_create_database()
+        cd = self._load_cd_with_mocked_embeddings()
 
         fake_docs = [MagicMock(page_content="Page 1"), MagicMock(page_content="Page 2")]
         mock_loader = MagicMock()
         mock_loader.load.return_value = fake_docs
 
-        with patch("create_database.PyPDFDirectoryLoader", return_value=mock_loader):
+        with patch.object(cd, "PyPDFDirectoryLoader", return_value=mock_loader):
             docs = cd.load_data()
 
         assert docs == fake_docs
@@ -113,12 +143,12 @@ class TestLoadData:
 
     def test_load_data_calls_loader_with_data_path(self):
         """PyPDFDirectoryLoader must be initialised with the configured data_path."""
-        cd = import_create_database()
+        cd = self._load_cd_with_mocked_embeddings()
 
         mock_loader = MagicMock()
         mock_loader.load.return_value = []
 
-        with patch("create_database.PyPDFDirectoryLoader", return_value=mock_loader) as MockLoader:
+        with patch.object(cd, "PyPDFDirectoryLoader", return_value=mock_loader) as MockLoader:
             cd.load_data()
             MockLoader.assert_called_once_with(cd.data_path)
 
