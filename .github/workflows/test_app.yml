@@ -5,8 +5,11 @@
 # mocked inside the tests, so the runner never needs a GPU or downloads
 # multi-GB model weights.
 
+#Git action workflow name i.e. the git action workflow we are using
 name: Python application
 
+# When should the CI/CD pipeline run/triggers? 
+#In this case, on every push or pull request to the main branch.
 on:
   push:
     branches: [ "main" ]
@@ -17,6 +20,9 @@ permissions:
   contents: write          # write access needed to push to qa branch
 
 jobs:
+# So they will be building the application on virtual machines running the latest version of Ubuntu.
+# So as the virtual machine doesn't have any files or livraries so we need to install 
+# all the dependencies and files to run the application.
   build:
     runs-on: ubuntu-latest
 
@@ -25,6 +31,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # fetch all branches, not just the triggering one
+                           # Need to fetch because we need so that we can run on the vm the 
+                           # same code that is in the repository and also to push to the qa branch later on
 
       # ── 2. Python setup ───────────────────────────────────────────────────
       - name: Set up Python 3.10
@@ -33,6 +41,7 @@ jobs:
           python-version: "3.10"
 
       # ── 3. Install dependencies ───────────────────────────────────────────
+      # We install torch first as a CPU-only package to avoid downloading large GPU wheels.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -77,6 +86,8 @@ jobs:
           mkdir -p Data chroma
 
       # ── 6. Run tests ──────────────────────────────────────────────────────
+      # Here it will run the test cases we specify here;
+      # In this case it will run the test cases in the test_app.py file.
       - name: Test with pytest
         env:
           # Prevent HuggingFace / sentence-transformers from downloading
