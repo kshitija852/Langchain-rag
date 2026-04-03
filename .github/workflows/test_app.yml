@@ -5,11 +5,8 @@
 # mocked inside the tests, so the runner never needs a GPU or downloads
 # multi-GB model weights.
 
-#Git action workflow name i.e. the git action workflow we are using
 name: Python application
 
-# When should the CI/CD pipeline run/triggers? 
-#In this case, on every push or pull request to the main branch.
 on:
   push:
     branches: [ "main" ]
@@ -19,10 +16,9 @@ on:
 permissions:
   contents: write          # write access needed to push to qa branch
 
+# We will be using the ubuntu as virtual machine to run the project to check if the test cases are satisfied
+# If the test cases are satisfied then we will be pushing the code to qa branch and then to azure container apps
 jobs:
-# So they will be building the application on virtual machines running the latest version of Ubuntu.
-# So as the virtual machine doesn't have any files or livraries so we need to install 
-# all the dependencies and files to run the application.
   build:
     runs-on: ubuntu-latest
 
@@ -31,9 +27,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # fetch all branches, not just the triggering one
-                           # Need to fetch because we need so that we can run on the vm the 
-                           # same code that is in the repository and also to push to the qa branch later on
 
+      # All the setup and installation of the libraries and dependencies are done in this step. We are also installing the core langchain packages that are used directly in the source files. We are also installing the testing framework and linting tools.
+      #It is done on ubuntu runner which is a virtual machine provided by github actions to run the workflows. We are using python 3.10 as the python version for our project. We are also installing torch as CPU-only to keep the runner fast and lean. We are also creating the required directories that are needed for the tests or import paths. We are also running the linting checks using flake8 and running the tests using pytest.
       # ── 2. Python setup ───────────────────────────────────────────────────
       - name: Set up Python 3.10
         uses: actions/setup-python@v5
@@ -41,7 +37,6 @@ jobs:
           python-version: "3.10"
 
       # ── 3. Install dependencies ───────────────────────────────────────────
-      # We install torch first as a CPU-only package to avoid downloading large GPU wheels.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -86,18 +81,17 @@ jobs:
           mkdir -p Data chroma
 
       # ── 6. Run tests ──────────────────────────────────────────────────────
-      # Here it will run the test cases we specify here;
-      # In this case it will run the test cases in the test_app.py file.
       - name: Test with pytest
         env:
           # Prevent HuggingFace / sentence-transformers from downloading
           # real model weights during the test run.
-          TRANSFORMERS_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1" 
           HF_DATASETS_OFFLINE: "1"
           # Silence tokenizer parallelism warnings in CI
           TOKENIZERS_PARALLELISM: "false"
+          # Here it will run the test cases that are defined in the test_app.py file. The -v flag is for verbose output and --tb=short is for shorter traceback in case of test failures. 
         run: |
-          pytest test_app.py -v --tb=short
+          pytest test_app.py -v --tb=short  
 
   # ── Deploy to QA ───────────────────────────────────────────────────────────
   # Runs only after the build job passes. Merges main into the qa branch
@@ -140,3 +134,58 @@ jobs:
           fi
 
           git push origin qa
+
+  # ── Deploy to Azure Container Apps ─────────────────────────────────────────
+  # Runs only after deploy-to-qa passes.
+  # Builds a fresh Docker image, pushes it to ACR, and updates the Container App.
+  deploy-to-azure:
+    runs-on: ubuntu-latest
+    needs: deploy-to-qa                  # only runs if deploy-to-qa succeeds
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      # ── 1. Checkout code ──────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+
+      # ── 2. Log in to Azure ────────────────────────────────────────────────
+      - name: Log in to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # ── 3. Log in to Azure Container Registry ─────────────────────────────
+      - name: Log in to ACR
+        run: |
+          docker login myragappregistry.azurecr.io \
+            --username ${{ secrets.REGISTRY_USERNAME }} \
+            --password ${{ secrets.REGISTRY_PASSWORD }}
+
+      # ── 4. Build Docker image ─────────────────────────────────────────────
+      # Tag with the git commit SHA so every deployment is uniquely identified
+      - name: Build Docker image
+        run: |
+          docker build -t myragappregistry.azurecr.io/rag-app:${{ github.sha }} .
+          docker tag myragappregistry.azurecr.io/rag-app:${{ github.sha }} \
+                     myragappregistry.azurecr.io/rag-app:latest
+
+      # ── 5. Push image to ACR ──────────────────────────────────────────────
+      - name: Push Docker image to ACR
+        run: |
+          docker push myragappregistry.azurecr.io/rag-app:${{ github.sha }}
+          docker push myragappregistry.azurecr.io/rag-app:latest
+
+      # ── 6. Deploy new image to Azure Container Apps ───────────────────────
+      - name: Deploy to Azure Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ secrets.AZURE_CONTAINER_APP_NAME }} \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --image myragappregistry.azurecr.io/rag-app:${{ github.sha }}
+
+      # ── 7. Verify deployment is healthy ───────────────────────────────────
+      - name: Verify deployment
+        run: |
+          az containerapp revision list \
+            --name ${{ secrets.AZURE_CONTAINER_APP_NAME }} \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --output table
